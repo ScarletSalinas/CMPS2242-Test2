@@ -8,10 +8,74 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
-var port = flag.Int("port", 4000, "Port number to listen on")
+var (
+	port = flag.Int("port", 4000, "Port number to listen on")
+	logDir = flag.String("logdir", "client_logs", "Directory to store client logs")
+	logMutex sync.Mutex
+	fileHandles = make(map[string]*os.File)
+)
+
+func ensureLogdir() error {
+	return os.MkdirAll(*logDir, 0755)
+}
+
+func getLogFile(clientAddr string) (*os.File, error) {
+	ip := strings.Split(clientAddr, ":")[0] // Extract ip from "ip:port"
+	safeIP := strings.ReplaceAll(ip, ".", "_") // Replace dots for filename
+
+	logPath := filepath.Join(*logDir, safeIP + ".log")
+
+	logMutex.Lock()
+	defer logMutex.Unlock()
+
+	if file, exists := fileHandles[ip]; exists {
+		return file, nil
+	}
+
+	file, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil, err
+	}
+
+	fileHandles[ip] = file
+	return file, nil
+}
+
+func logMessage(clientAddr, message string) {
+	logFile, err := getLogFile(clientAddr)
+	if err != nil {
+		log.Printf("[!] Failed to get log file for %s: %v", clientAddr, err)
+		return
+	}
+
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	logLine := fmt.Sprintf("[%s] %s\n", timestamp, message)
+
+	logMutex.Lock()
+	defer logMutex.Unlock()
+
+	if _, err := logFile.WriteString(logLine); err != nil {
+		log.Printf("[!] Failed to write log for %s: %v", clientAddr, err)
+	}
+}
+
+func closeLogFile(clientAddr string) {
+	ip := strings.Split(clientAddr, ":")[0] // Extract ip from "ip:port"
+
+	logMutex.Lock()
+	defer logMutex.Unlock()
+
+	if file, exists := fileHandles[ip]; exists {
+		file.Close()
+		delete(fileHandles, ip)
+	}
+}
 
 func handleConnection(conn net.Conn) {
 	// Log connection timestamp and address
@@ -19,10 +83,6 @@ func handleConnection(conn net.Conn) {
 	log.Printf("[+] Connection from %s", clientAddr)
 	startTime := time.Now()	// Record connection start time
 
-	// Set 30s inactivity timeout
-	conn.SetDeadline(time.Now().Add(30 * time.Second))
-
-	
 	defer func() {
 		duration := time.Since(startTime) // Calculate connection duration
 
@@ -36,12 +96,18 @@ func handleConnection(conn net.Conn) {
 			log.Printf("[!] Error closing %s: %v", clientAddr, err) 
 		}
 
+		closeLogFile(clientAddr)
+
 		// Normal disconnection
 		log.Printf("[-] Disconnected %s (duration: %s)", clientAddr, duration.Round(time.Millisecond))
 	}()
 
+	// Set 30s inactivity timeout
+	conn.SetDeadline(time.Now().Add(30 * time.Second))
+
 	const maxMessageSize = 1024
 	reader := bufio.NewReader(conn)	
+
 	for {
 		// Read until newline
 		line, err := reader.ReadString('\n')
@@ -52,6 +118,7 @@ func handleConnection(conn net.Conn) {
 		
 		// Clean input
 		clean := strings.TrimSpace(line)
+		logMessage(clientAddr, clean)	// Log original message
 
 		// Handle Command input
 		switch {
@@ -143,6 +210,19 @@ func isTimeout(err error) bool {
 
 func main() {
 	flag.Parse()
+
+	if err := ensureLogdir(); err != nil {
+		log.Fatalf("[!] Failed to create log directory: %v", err)
+	}
+
+	defer func() {
+		logMutex.Lock()
+		defer logMutex.Unlock()
+		for ip, file := range fileHandles {
+			file.Close()
+			delete(fileHandles, ip)
+		}
+	}()
 	
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
@@ -153,12 +233,12 @@ func main() {
 
 	log.Printf("Server listening on :%d", *port)
 
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				log.Printf("[!] Accept error: %v", err)
-				continue
-			}
-			go handleConnection(conn)
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Printf("[!] Accept error: %v", err)
+			continue
 		}
+		go handleConnection(conn)
+	}
 }
