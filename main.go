@@ -52,51 +52,71 @@ func handleConnection(conn net.Conn) {
 		
 		// Clean input
 		clean := strings.TrimSpace(line)
-		truncated := false
 
+		// Handle Command input
+		switch {
+		case strings.HasPrefix(clean, "/time"):
+			currentTime := time.Now().Format("2006-01-02 15:04:05 CST")	// Get current time
+			conn.Write([]byte("Server time: " + currentTime + "\n"))
+			continue  // Maintain connection
+		
+		case strings.HasPrefix(clean, "/quit"):
+			conn.Write([]byte("Closing connection...\n"))
+			return //close connection
 
-		// Handle special input 
-		switch strings.ToLower(clean) {
-		case "hello":
-			if _, err := conn.Write([]byte("Hi, there!\n")); err != nil {
-				handleDisconnect(clientAddr, err, "write")
+		case strings.HasPrefix(clean, "/echo "):
+			message := strings.TrimPrefix(clean, "/echo ") // Remove "/echo" from input
+			conn.Write([]byte(message + "\n"))
+			continue // Maintain conn.
+
+		default:
+
+			// Handle special input 
+			switch strings.ToLower(clean) {
+			case "hello":
+				if _, err := conn.Write([]byte("Hi, there!\n")); err != nil {
+					handleDisconnect(clientAddr, err, "write")
+				}
+				continue // Maintains connection
+
+			case "":
+				if _, err := conn.Write([]byte("Say something...\n")); err != nil {
+					handleDisconnect(clientAddr, err, "write")
+				}
+				continue // Maintains connection
+
+			case "bye":
+				if _, err := conn.Write([]byte("So long, and thanks for all the fish!\n")); err != nil {
+					handleDisconnect(clientAddr, err, "write")
+				}
+				return // Disconnects
+
+			default:
+				truncated := false
+				// Handle normal messages with truncation
+				if len(clean) > maxMessageSize {
+					clean = clean[:maxMessageSize]
+					truncated = true
+				}
+
+				if truncated {
+					log.Printf("[!] Truncated message from %s", clientAddr)
+					if _, err := conn.Write([]byte("[!] Message truncated\n")); err != nil {
+						handleDisconnect(clientAddr, err, "write")
+						return
+					}
+				}
+
+				// Reset deadline after successful operation
+				conn.SetDeadline(time.Now().Add(30 * time.Second))
+
+				//  Safely Echo back + newline
+				if _, err = conn.Write([]byte(clean + "\n")); err != nil {
+					handleDisconnect(clientAddr, err, "write")
+					return
+				}
 			}
-			continue // Maintains connection
 
-		case "":
-			if _, err := conn.Write([]byte("Say something...\n")); err != nil {
-				handleDisconnect(clientAddr, err, "write")
-			}
-			continue // Maintains connection
-
-		case "bye":
-			if _, err := conn.Write([]byte("So long, and thanks for all the fish!\n")); err != nil {
-				handleDisconnect(clientAddr, err, "write")
-			}
-			return // Disconnects
-		}
-
-		// Handle normal messages with truncation
-		if len(clean) > maxMessageSize {
-			clean = clean[:maxMessageSize]
-			truncated = true
-		}
-
-		if truncated {
-			log.Printf("[!] Truncated message from %s", clientAddr)
-			if _, err := conn.Write([]byte("[!] Message truncated\n")); err != nil {
-				handleDisconnect(clientAddr, err, "write")
-				return
-			}
-		}
-
-		// Reset deadline after successful operation
-		conn.SetDeadline(time.Now().Add(30 * time.Second))
-
-		//  Safely Echo back + newline
-		if _, err = conn.Write([]byte(clean + "\n")); err != nil {
-			handleDisconnect(clientAddr, err, "write")
-			return
 		}
 	}
 }
@@ -131,7 +151,7 @@ func main() {
 
 	defer listener.Close()
 
-	fmt.Printf("Server listening on :%d", *port)
+	log.Printf("Server listening on :%d", *port)
 
 		for {
 			conn, err := listener.Accept()
