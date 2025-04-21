@@ -34,7 +34,12 @@ func handleConnection(conn net.Conn) {
 			log.Printf("[!] Write error to %s: %v", clientAddr, err)
 			return
 		}
-
+		
+		// Validate recieved data
+		if n == 0 {
+			log.Printf("[!] Client %s sent empty payload", clientAddr)
+			continue
+		}
 		// Reset deadline after successful operation
 		conn.SetDeadline(time.Now().Add(30 * time.Second))
 	}
