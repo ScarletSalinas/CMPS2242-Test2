@@ -36,8 +36,8 @@ func handleConnection(conn net.Conn) {
 		log.Printf("[-] Disconnected %s (duration: %s)", clientAddr, duration.Round(time.Millisecond))
 	}()
 
-	const readBufferSize = 1024
-	buf := make([]byte, readBufferSize)	// Buffer for reading client data
+	const maxMessageSize = 1024
+	buf := make([]byte, maxMessageSize)	// Buffer for reading client data
 	
 	for {
 		// Read data from client
@@ -47,8 +47,20 @@ func handleConnection(conn net.Conn) {
 			return
 		}
 
-		if n == 0 {
-			continue // Skip empty packets
+		truncated := false
+
+		if n == maxMessageSize {
+			// Peek to see if more data is coming after 1024 bytes
+			extra := make([]byte, 1)
+			conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			if _, err := conn.Read(extra); err == nil {
+				truncated = true
+			}
+		}
+
+		if truncated {
+			log.Printf("[!] Truncated message from %s to %d bytes", clientAddr, maxMessageSize)
+			conn.Write([]byte("[!] Warning: message too long. Truncated to 1024 bytes.\n"))
 		}
 
 		// Reset deadline after successful operation
