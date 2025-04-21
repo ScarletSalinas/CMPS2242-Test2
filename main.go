@@ -14,33 +14,45 @@ func handleConnection(conn net.Conn) {
 	clientAddr := conn.RemoteAddr().String()
 	log.Printf("[+] Connection from %s", clientAddr)
 
-	// Set 30s inactivity tiemout
+	// Set 30s inactivity timeout
 	conn.SetDeadline(time.Now().Add(30 * time.Second))
+
+	// Log connection duration
+	duration := time.Now()
 
 	defer func() {
 		// Logs & recovers from panics
 		if r := recover(); r != nil {
-			log.Printf("[!] Recovered form panic with client %s: %v", clientAddr, r)
+			log.Printf("[!] Recovered from panic with client %s after %s: %v", clientAddr, duration.Round(time.Second), r)
 		}
 		conn.Close()
-		log.Printf("[-] Disconnection from %s", clientAddr)  // Log disconnection timestamp
+		log.Printf("[-] Disconnection from %s (duration %s)", clientAddr, duration.Round(time.Second))  // Log disconnection timestamp
 	}()
 
 	buf := make([]byte, 1024)
 	for {
+		// Read data from client
 		n, err := conn.Read(buf)
 		if err != nil {
-			if err == io.EOF {
+			// Handle read errors:
+			switch {
+			case err == io.EOF:
+				// Client closed connection normally
 				log.Printf("[-] Client %s disconnected", clientAddr)
-			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			case errors.Is(err, net.ErrClosed):
+				// Connection was closed by server
+				log.Printf("[-] Connection %s closed by server", clientAddr)
+			case isTimeout(err):
+				// Read operation timed out
 				log.Printf("[-] Client %s timed out", clientAddr)
-			} else {
+			default:
+				// Unexpected read error
 				log.Printf("[!] Read error from %s: %v", clientAddr, err)
 			}
 			return
 		}
 
-		// Validate recieved data
+		// Validate received data
 		if n == 0 {
 			log.Printf("[!] Client %s sent empty payload", clientAddr)
 			continue
@@ -50,14 +62,30 @@ func handleConnection(conn net.Conn) {
 
 		//  Safely Echo back
 		if _, err = conn.Write(buf[:n]); err != nil {
-			if err == io.EOF || errors.Is(err, net.ErrClosed) {
-				log.Printf("[-] Client %s disconnected during write", clientAddr)	
-			} else {
+			// Handle different write errors:
+			switch {
+			case err == io.EOF:
+				// Client disconnected during write
+				log.Printf("[-] Client %s disconnected during write", clientAddr)
+			case errors.Is(err, net.ErrClosed):
+				// Connection was closed
+				log.Printf("[-] Connection %s closed during write", clientAddr)
+			case isTimeout(err):
+				// Write operation timed out
+				log.Printf("[-] Write to %s timed out", clientAddr)
+			default:
+				// Unexpected write error
 				log.Printf("[!] Write error to %s: %v", clientAddr, err)
 			}
 			return
 		}
 	}
+}
+
+// Helper function to check for timeout errors
+func isTimeout(err error) bool {
+	netErr, ok := err.(net.Error)
+	return ok && netErr.Timeout()
 }
 
 func main() {
