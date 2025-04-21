@@ -13,72 +13,66 @@ func handleConnection(conn net.Conn) {
 	// Log connection timestamp and address
 	clientAddr := conn.RemoteAddr().String()
 	log.Printf("[+] Connection from %s", clientAddr)
+	startTime := time.Now()	// Record connection start time
 
 	// Set 30s inactivity timeout
 	conn.SetDeadline(time.Now().Add(30 * time.Second))
 
-	// Log connection duration
-	duration := time.Now()
-
+	
 	defer func() {
+		duration := time.Since(startTime) // Calculate connection duration
+
 		// Logs & recovers from panics
 		if r := recover(); r != nil {
-			log.Printf("[!] Recovered from panic with client %s after %s: %v", clientAddr, duration.Round(time.Second), r)
+			log.Printf("[!] Recovered from panic with client %s after %s: %v", clientAddr, duration.Round(time.Millisecond), r)
 		}
-		conn.Close()
-		log.Printf("[-] Disconnection from %s (duration %s)", clientAddr, duration.Round(time.Second))  // Log disconnection timestamp
+		
+		// Close connection and log any errors
+		if err := conn.Close(); err != nil {
+			log.Printf("[!] Error closing %s: %v", clientAddr, err) 
+		}
+
+		// Normal disconnection
+		log.Printf("[-] Disconnected %s (duration: %s)", clientAddr, duration.Round(time.Millisecond))
 	}()
 
-	buf := make([]byte, 1024)
+	const readBufferSize = 1024
+	buf := make([]byte, readBufferSize)	// Buffer for reading client data
+	
 	for {
 		// Read data from client
 		n, err := conn.Read(buf)
 		if err != nil {
-			// Handle read errors:
-			switch {
-			case err == io.EOF:
-				// Client closed connection normally
-				log.Printf("[-] Client %s disconnected", clientAddr)
-			case errors.Is(err, net.ErrClosed):
-				// Connection was closed by server
-				log.Printf("[-] Connection %s closed by server", clientAddr)
-			case isTimeout(err):
-				// Read operation timed out
-				log.Printf("[-] Client %s timed out", clientAddr)
-			default:
-				// Unexpected read error
-				log.Printf("[!] Read error from %s: %v", clientAddr, err)
-			}
+			handleDisconnect(clientAddr, err, "read")
 			return
 		}
 
-		// Validate received data
 		if n == 0 {
-			log.Printf("[!] Client %s sent empty payload", clientAddr)
-			continue
+			continue // Skip empty packets
 		}
+
 		// Reset deadline after successful operation
 		conn.SetDeadline(time.Now().Add(30 * time.Second))
 
 		//  Safely Echo back
 		if _, err = conn.Write(buf[:n]); err != nil {
-			// Handle different write errors:
-			switch {
-			case err == io.EOF:
-				// Client disconnected during write
-				log.Printf("[-] Client %s disconnected during write", clientAddr)
-			case errors.Is(err, net.ErrClosed):
-				// Connection was closed
-				log.Printf("[-] Connection %s closed during write", clientAddr)
-			case isTimeout(err):
-				// Write operation timed out
-				log.Printf("[-] Write to %s timed out", clientAddr)
-			default:
-				// Unexpected write error
-				log.Printf("[!] Write error to %s: %v", clientAddr, err)
-			}
+			handleDisconnect(clientAddr, err, "write")
 			return
 		}
+	}
+}
+
+// Helper func to handle disconnect/error handling 
+func handleDisconnect(clientAddr string, err error, op string) {
+	switch {
+	case err == io.EOF:
+		log.Printf("[-] Client %s disconnected", clientAddr)
+	case errors.Is(err, net.ErrClosed):
+		log.Printf("[-] Connection %s closed", clientAddr)
+	case isTimeout(err):
+		log.Printf("[-] %s timeout for %s", op, clientAddr)
+	default:
+		log.Printf("[!] %s error with %s: %v", op, clientAddr, err)
 	}
 }
 
