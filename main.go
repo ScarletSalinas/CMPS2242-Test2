@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 )
+var port = flag.Int("port", 4000, "Port number to listen on")
 
 func handleConnection(conn net.Conn) {
 	// Log connection timestamp and address
@@ -40,44 +42,45 @@ func handleConnection(conn net.Conn) {
 
 	const maxMessageSize = 1024
 	reader := bufio.NewReader(conn)	
-		for {
-			// Read until newline
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				handleDisconnect(clientAddr, err, "read")
-				return
-			}
-	
-			// Clean the input
-			original := line
-			truncated := false
-			if len(original) > maxMessageSize {
-				original = original[:maxMessageSize]
-				truncated = true
-			}
-			clean := strings.TrimSpace(original)
-	
-			if truncated {
-				log.Printf("[!] Truncated message from %s to %d bytes", clientAddr, maxMessageSize)
-				_, _ = conn.Write([]byte("[!] Warning: message too long. Truncated to 1024 bytes.\n"))
-			}
-
-			// Reset deadline after successful operation
-			conn.SetDeadline(time.Now().Add(30 * time.Second))
-
-			//  Safely Echo back + newline
-			if _, err = conn.Write([]byte(clean + "\n")); err != nil {
-				handleDisconnect(clientAddr, err, "write")
-				return
-			}
+	for {
+		// Read until newline
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			handleDisconnect(clientAddr, err, "read")
+			return
 		}
+
+		// Clean the input
+		original := line
+		truncated := false
+		if len(original) > maxMessageSize {
+			original = original[:maxMessageSize]
+			truncated = true
+		}
+		clean := strings.TrimSpace(original)
+
+		// Handle truncation
+		if truncated {
+			log.Printf("[!] Truncated message from %s to %d bytes", clientAddr, maxMessageSize)
+			_, _ = conn.Write([]byte("[!] Warning: message too long. Truncated to 1024 bytes.\n"))
+		}
+
+		// Reset deadline after successful operation
+		conn.SetDeadline(time.Now().Add(30 * time.Second))
+
+		//  Safely Echo back + newline
+		if _, err = conn.Write([]byte(clean + "\n")); err != nil {
+			handleDisconnect(clientAddr, err, "write")
+			return
+		}
+	}
 }
 
 // Helper func to handle disconnect/error handling 
 func handleDisconnect(clientAddr string, err error, op string) {
 	switch {
 	case err == io.EOF:
-		log.Printf("[-] Client %s disconnected", clientAddr)
+		return
 	case errors.Is(err, net.ErrClosed):
 		log.Printf("[-] Connection %s closed", clientAddr)
 	case isTimeout(err):
@@ -94,14 +97,16 @@ func isTimeout(err error) bool {
 }
 
 func main() {
-	listener, err := net.Listen("tcp", ":4000")
+	flag.Parse()
+	
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
 		log.Fatalf("[!] Failed to start server: %v", err)
 	}
 
 	defer listener.Close()
 
-	fmt.Println("Server listening on :4000")
+	fmt.Printf("Server listening on :%d", *port)
 
 		for {
 			conn, err := listener.Accept()
