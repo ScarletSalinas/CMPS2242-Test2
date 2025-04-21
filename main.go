@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -37,41 +39,38 @@ func handleConnection(conn net.Conn) {
 	}()
 
 	const maxMessageSize = 1024
-	buf := make([]byte, maxMessageSize)	// Buffer for reading client data
+	reader := bufio.NewReader(conn)	
+		for {
+			// Read until newline
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				handleDisconnect(clientAddr, err, "read")
+				return
+			}
 	
-	for {
-		// Read data from client
-		n, err := conn.Read(buf)
-		if err != nil {
-			handleDisconnect(clientAddr, err, "read")
-			return
-		}
-
-		truncated := false
-
-		if n == maxMessageSize {
-			// Peek to see if more data is coming after 1024 bytes
-			extra := make([]byte, 1)
-			conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-			if _, err := conn.Read(extra); err == nil {
+			// Clean the input
+			original := line
+			truncated := false
+			if len(original) > maxMessageSize {
+				original = original[:maxMessageSize]
 				truncated = true
 			}
-		}
+			clean := strings.TrimSpace(original)
+	
+			if truncated {
+				log.Printf("[!] Truncated message from %s to %d bytes", clientAddr, maxMessageSize)
+				_, _ = conn.Write([]byte("[!] Warning: message too long. Truncated to 1024 bytes.\n"))
+			}
 
-		if truncated {
-			log.Printf("[!] Truncated message from %s to %d bytes", clientAddr, maxMessageSize)
-			conn.Write([]byte("[!] Warning: message too long. Truncated to 1024 bytes.\n"))
-		}
+			// Reset deadline after successful operation
+			conn.SetDeadline(time.Now().Add(30 * time.Second))
 
-		// Reset deadline after successful operation
-		conn.SetDeadline(time.Now().Add(30 * time.Second))
-
-		//  Safely Echo back
-		if _, err = conn.Write(buf[:n]); err != nil {
-			handleDisconnect(clientAddr, err, "write")
-			return
+			//  Safely Echo back + newline
+			if _, err = conn.Write([]byte(clean + "\n")); err != nil {
+				handleDisconnect(clientAddr, err, "write")
+				return
+			}
 		}
-	}
 }
 
 // Helper func to handle disconnect/error handling 
