@@ -1,14 +1,19 @@
 package main
 
-import("fmt"
-		"log"
-		"net"
+import (
+	"fmt"
+	"log"
+	"net"
+	"time"
 )
 
 func handleConnection(conn net.Conn) {
 	// Log connection timestamp and address
 	clientAddr := conn.RemoteAddr().String()
 	log.Printf("[+] Connection from %s", clientAddr)
+
+	// Set 30s inactivity tiemout
+	conn.SetDeadline(time.Now().Add(30 * time.Second))
 
 	defer func() {
 		// Log disconnection timestamp
@@ -29,6 +34,9 @@ func handleConnection(conn net.Conn) {
 			log.Printf("[!] Write error to %s: %v", clientAddr, err)
 			return
 		}
+
+		// Reset deadline after successful operation
+		conn.SetDeadline(time.Now().Add(30 * time.Second))
 	}
 }
 
