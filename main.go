@@ -49,20 +49,45 @@ func handleConnection(conn net.Conn) {
 			handleDisconnect(clientAddr, err, "read")
 			return
 		}
-
-		// Clean the input
-		original := line
+		
+		// Clean input
+		clean := strings.TrimSpace(line)
 		truncated := false
-		if len(original) > maxMessageSize {
-			original = original[:maxMessageSize]
+
+
+		// Handle special input 
+		switch strings.ToLower(clean) {
+		case "hello":
+			if _, err := conn.Write([]byte("Hi, there!\n")); err != nil {
+				handleDisconnect(clientAddr, err, "write")
+			}
+			continue // Maintains connection
+
+		case "":
+			if _, err := conn.Write([]byte("Say something...\n")); err != nil {
+				handleDisconnect(clientAddr, err, "write")
+			}
+			continue // Maintains connection
+
+		case "bye":
+			if _, err := conn.Write([]byte("So long, and thanks for all the fish!\n")); err != nil {
+				handleDisconnect(clientAddr, err, "write")
+			}
+			return // Disconnects
+		}
+
+		// Handle normal messages with truncation
+		if len(clean) > maxMessageSize {
+			clean = clean[:maxMessageSize]
 			truncated = true
 		}
-		clean := strings.TrimSpace(original)
 
-		// Handle truncation
 		if truncated {
-			log.Printf("[!] Truncated message from %s to %d bytes", clientAddr, maxMessageSize)
-			_, _ = conn.Write([]byte("[!] Warning: message too long. Truncated to 1024 bytes.\n"))
+			log.Printf("[!] Truncated message from %s", clientAddr)
+			if _, err := conn.Write([]byte("[!] Message truncated\n")); err != nil {
+				handleDisconnect(clientAddr, err, "write")
+				return
+			}
 		}
 
 		// Reset deadline after successful operation
